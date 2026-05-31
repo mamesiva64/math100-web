@@ -1,23 +1,21 @@
 /**
- * @typedef {{ id: string; name: string; createdAt: string }} User
  * @typedef {{ id: string; type: "addition"; rowNumbers: number[]; colNumbers: number[]; answers: number[][]; createdAt: string }} ProblemSheet
  * @typedef {{ startedAt: string; finishedAt: string; elapsedMs: number }} TimerResult
  * @typedef {{ digit: number | null; confidence: number }} DigitPrediction
  * @typedef {{ rawText: string; value: number | null; confidence: number; digitPredictions: DigitPrediction[] }} CellPrediction
  * @typedef {{ x: number; y: number; expected: number; actual: number | null; isCorrect: boolean; needsReview: boolean; confidence: number; imageDataUrl?: string }} CellGrade
- * @typedef {{ id: string; userId: string; sheetId: string; problemType: "addition"; createdAt: string; elapsedMs: number | null; totalCount: number; correctCount: number; wrongCount: number; reviewCount: number; accuracy: number; cells: CellGrade[] }} PracticeResult
+ * @typedef {{ id: string; userId?: string; sheetId: string; problemType: "addition"; createdAt: string; elapsedMs: number | null; totalCount: number; correctCount: number; wrongCount: number; reviewCount: number; accuracy: number; cells: CellGrade[] }} PracticeResult
  */
 
 const DB_NAME = "math100-mvp";
 const DB_VERSION = 1;
 const CONFIDENCE_THRESHOLD = 0.75;
+const DEFAULT_RESULT_OWNER = "local";
 
 const app = document.querySelector("#app");
 
 const state = {
   view: "home",
-  users: [],
-  selectedUserId: "",
   currentSheet: null,
   answerInputs: Array.from({ length: 10 }, () => Array.from({ length: 10 }, () => "")),
   timer: {
@@ -53,8 +51,7 @@ const icons = {
   sheet: "▦",
   timer: "◷",
   scan: "▣",
-  history: "↗",
-  settings: "⚙"
+  history: "↗"
 };
 
 let dbPromise;
@@ -147,12 +144,7 @@ async function remove(storeName, id) {
 }
 
 async function loadState() {
-  state.users = (await getAll("users")).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   state.results = (await getAll("results")).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  state.selectedUserId = localStorage.getItem("math100.selectedUserId") || state.users[0]?.id || "";
-  if (!state.users.some((user) => user.id === state.selectedUserId)) {
-    state.selectedUserId = state.users[0]?.id || "";
-  }
   const savedSheet = localStorage.getItem("math100.currentSheet");
   if (savedSheet) {
     try {
@@ -161,10 +153,6 @@ async function loadState() {
       state.currentSheet = null;
     }
   }
-}
-
-function selectedUser() {
-  return state.users.find((user) => user.id === state.selectedUserId) || null;
 }
 
 function generateProblem() {
@@ -217,11 +205,11 @@ function summarizeCells(cells) {
 }
 
 async function saveResult(cells, elapsedMs = state.timer.displayMs || null) {
-  if (!state.currentSheet || !state.selectedUserId) return null;
+  if (!state.currentSheet) return null;
   const summary = summarizeCells(cells);
   const result = {
     id: state.review.resultId || uid("result"),
-    userId: state.selectedUserId,
+    userId: DEFAULT_RESULT_OWNER,
     sheetId: state.currentSheet.id,
     problemType: "addition",
     createdAt: nowIso(),
@@ -274,6 +262,15 @@ function updateTimerOnly() {
   if (display) display.textContent = formatMs(state.timer.displayMs);
 }
 
+function focusNextAnswerInput(currentInput) {
+  const inputs = Array.from(document.querySelectorAll("[data-answer-input]"));
+  const index = inputs.indexOf(currentInput);
+  const next = inputs[index + 1];
+  if (!next) return;
+  next.focus();
+  next.select();
+}
+
 function setView(view) {
   state.view = view;
   state.modalCell = null;
@@ -305,18 +302,9 @@ function render() {
 }
 
 function renderTopbar() {
-  const userOptions = state.users
-    .map((user) => `<option value="${user.id}" ${user.id === state.selectedUserId ? "selected" : ""}>${escapeHtml(user.name)}</option>`)
-    .join("");
   return `
     <header class="topbar">
       <div class="brand"><span class="brand-mark">百</span><span>百ます計算</span></div>
-      <div class="top-actions">
-        <select data-select-user aria-label="ユーザー選択">
-          <option value="">ユーザー未選択</option>
-          ${userOptions}
-        </select>
-      </div>
     </header>
   `;
 }
@@ -357,15 +345,12 @@ function renderView() {
       return renderReviewPage();
     case "history":
       return renderHistoryPage();
-    case "settings":
-      return renderSettingsPage();
     default:
       return renderHomePage();
   }
 }
 
 function renderHomePage() {
-  const user = selectedUser();
   const recent = filteredResults().slice(0, 3);
   return `
     <section class="hero">
@@ -377,29 +362,19 @@ function renderHomePage() {
           </div>
           <button class="primary" data-generate>新しい問題</button>
         </div>
-        ${user ? `<div class="muted">現在のユーザー: ${escapeHtml(user.name)}</div>` : `<div class="empty">まずユーザーを追加してください。</div>`}
       </div>
       <div class="grid-3">
         <button class="panel stack" data-view="problem"><strong>問題生成・印刷</strong><span class="muted">A4固定レイアウト</span></button>
         <button class="panel stack" data-view="practice"><strong>タイマー・手動採点</strong><span class="muted">100問を入力して採点</span></button>
         <button class="panel stack" data-view="scan"><strong>撮影採点</strong><span class="muted">セル切り出しと確認</span></button>
       </div>
-      <div class="grid-2">
-        <section class="panel">
-          <div class="section-head">
-            <h2>ユーザー</h2>
-            <button data-view="settings">管理</button>
-          </div>
-          ${renderUserList(false)}
-        </section>
-        <section class="panel">
-          <div class="section-head">
-            <h2>最近の記録</h2>
-            <button data-view="history">見る</button>
-          </div>
-          ${recent.length ? recent.map(renderHistoryRow).join("") : `<div class="empty">まだ記録がありません。</div>`}
-        </section>
-      </div>
+      <section class="panel">
+        <div class="section-head">
+          <h2>最近の記録</h2>
+          <button data-view="history">見る</button>
+        </div>
+        ${recent.length ? recent.map(renderHistoryRow).join("") : `<div class="empty">まだ記録がありません。</div>`}
+      </section>
     </section>
   `;
 }
@@ -530,10 +505,8 @@ function renderPrintableImage(kind) {
 function getPrintableSheetImageDataUrl() {
   const sheet = state.currentSheet;
   if (!sheet) return "";
-  const user = selectedUser();
   const cacheKey = JSON.stringify({
     id: sheet.id,
-    userName: user?.name || "",
     rowNumbers: sheet.rowNumbers,
     colNumbers: sheet.colNumbers
   });
@@ -561,7 +534,6 @@ function getPrintableSheetImageDataUrl() {
 
   ctx.font = "48px system-ui, sans-serif";
   ctx.fillText("なまえ", 190, 430);
-  ctx.fillText(user?.name || "", 380, 430);
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.moveTo(360, 448);
@@ -769,7 +741,7 @@ function renderHistoryPage() {
         <div class="section-head">
           <div>
             <h1>履歴</h1>
-            <div class="muted">ユーザー別の直近10回と全期間を見られます。</div>
+            <div class="muted">直近10回と全期間の記録を見られます。</div>
           </div>
         </div>
         ${results.length ? renderHistoryStats(results) : `<div class="empty">まだ記録がありません。</div>`}
@@ -807,67 +779,19 @@ function renderHistoryStats(results) {
 }
 
 function renderHistoryRow(result) {
-  const user = state.users.find((item) => item.id === result.userId);
   return `
     <div class="history-row">
       <div>
         <strong>${formatDate(result.createdAt)}</strong>
-        <div class="muted small">${escapeHtml(user?.name || "削除済みユーザー")} / 足し算 / ${formatMs(result.elapsedMs)}</div>
+        <div class="muted small">足し算 / ${formatMs(result.elapsedMs)}</div>
       </div>
       <div class="small">${result.accuracy}%・ミス${result.wrongCount}</div>
     </div>
   `;
 }
 
-function renderSettingsPage() {
-  return `
-    <section class="stack">
-      <div class="panel">
-        <div class="section-head"><h1>設定</h1></div>
-        <form class="row" data-user-form>
-          <input name="name" placeholder="子供の名前" required />
-          <button class="primary">ユーザー追加</button>
-        </form>
-      </div>
-      <section class="panel stack">
-        <h2>ユーザー管理</h2>
-        ${renderUserList(true)}
-      </section>
-      <section class="panel stack">
-        <h2>モデル情報</h2>
-        <div class="muted">ONNX Runtime Webと digit_classifier.onnx は未同梱です。現在は空欄検出と要確認フローで動作します。</div>
-      </section>
-      <section class="panel stack">
-        <h2>データ削除</h2>
-        <button class="danger" data-clear-results>履歴を削除</button>
-      </section>
-    </section>
-  `;
-}
-
-function renderUserList(manage) {
-  if (!state.users.length) return `<div class="empty">ユーザーがいません。</div>`;
-  return `
-    <div class="user-list">
-      ${state.users
-        .map(
-          (user) => `
-          <div class="user-row ${user.id === state.selectedUserId ? "selected" : ""}">
-            <button data-pick-user="${user.id}">
-              <strong>${escapeHtml(user.name)}</strong>
-              <span class="muted small">${formatDate(user.createdAt)}</span>
-            </button>
-            ${manage ? `<button class="danger" data-delete-user="${user.id}">削除</button>` : ""}
-          </div>
-        `
-        )
-        .join("")}
-    </div>
-  `;
-}
-
 function filteredResults() {
-  return state.results.filter((result) => !state.selectedUserId || result.userId === state.selectedUserId);
+  return state.results;
 }
 
 function drawCharts() {
@@ -940,40 +864,6 @@ function bindEvents() {
   document.querySelectorAll("[data-print]").forEach((button) => {
     button.addEventListener("click", () => window.print());
   });
-  document.querySelector("[data-select-user]")?.addEventListener("change", async (event) => {
-    state.selectedUserId = event.target.value;
-    localStorage.setItem("math100.selectedUserId", state.selectedUserId);
-    render();
-  });
-  document.querySelectorAll("[data-pick-user]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedUserId = button.dataset.pickUser;
-      localStorage.setItem("math100.selectedUserId", state.selectedUserId);
-      render();
-    });
-  });
-  document.querySelector("[data-user-form]")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") || "").trim();
-    if (!name) return;
-    const user = { id: uid("user"), name, createdAt: nowIso() };
-    await put("users", user);
-    state.users = (await getAll("users")).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    state.selectedUserId = user.id;
-    localStorage.setItem("math100.selectedUserId", user.id);
-    render();
-  });
-  document.querySelectorAll("[data-delete-user]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!confirm("このユーザーを削除します。履歴は残ります。")) return;
-      await remove("users", button.dataset.deleteUser);
-      state.users = (await getAll("users")).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      state.selectedUserId = state.users[0]?.id || "";
-      localStorage.setItem("math100.selectedUserId", state.selectedUserId);
-      render();
-    });
-  });
   document.querySelector("[data-clear-results]")?.addEventListener("click", async () => {
     if (!confirm("履歴をすべて削除します。")) return;
     const db = await openDb();
@@ -994,6 +884,11 @@ function bindEvents() {
       const y = Number(input.dataset.y);
       state.answerInputs[y][x] = event.target.value.replace(/[^\d]/g, "").slice(0, 2);
       event.target.value = state.answerInputs[y][x];
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      focusNextAnswerInput(input);
     });
   });
   document.querySelector("[data-manual-save]")?.addEventListener("click", async () => {

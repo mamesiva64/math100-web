@@ -339,11 +339,13 @@ h3 {
 }
 
 .answer-input.correct {
-  background: #dcfce7;
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .answer-input.wrong {
   background: #fee2e2;
+  color: #b91c1c;
 }
 
 .answer-input.review {
@@ -535,11 +537,13 @@ h3 {
 }
 
 .grade-cell.correct {
-  background: #dcfce7;
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .grade-cell.wrong {
   background: #fee2e2;
+  color: #b91c1c;
 }
 
 .grade-cell.review {
